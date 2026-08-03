@@ -1,13 +1,15 @@
+from typing import Optional
+
 import numpy as np
 import sounddevice as sd
 import speech_recognition as sr
 
+from .audio_utils import create_input_stream, resample_audio, select_input_device
 
 SAMPLE_RATE = 16000
 CHANNELS = 1
 DTYPE = "int16"
 CHUNK_DURATION = 0.1
-CHUNK_SAMPLES = int(SAMPLE_RATE * CHUNK_DURATION)
 
 DEFAULT_LANGUAGE = "es-ES"
 DEFAULT_MAX_DURATION = 8.0
@@ -25,6 +27,7 @@ class SpeechToText:
         silence_duration: float = DEFAULT_SILENCE_DURATION,
         energy_multiplier: float = DEFAULT_ENERGY_MULTIPLIER,
         min_energy: int = DEFAULT_MIN_ENERGY,
+        input_device: Optional[str] = None,
     ):
         self.language = language
         self.max_duration = max_duration
@@ -33,6 +36,10 @@ class SpeechToText:
         self.min_energy = min_energy
         self.recognizer = sr.Recognizer()
         self._last_energy_threshold = self.min_energy
+
+        self._device_index, self._stream_sr, self._need_resample = (
+            select_input_device(input_device, SAMPLE_RATE)
+        )
 
     def _measure_energy(self, audio_chunk: np.ndarray) -> float:
         return float(np.abs(audio_chunk.astype(np.float32)).mean())
@@ -47,17 +54,26 @@ class SpeechToText:
         speech_started = False
         silence_count = 0
 
-        with sd.InputStream(
-            samplerate=SAMPLE_RATE,
+        block_samples = int(self._stream_sr * CHUNK_DURATION)
+        sd.sleep(400)
+
+        with create_input_stream(
+            device=self._device_index,
+            samplerate=self._stream_sr,
             channels=CHANNELS,
             dtype=DTYPE,
-            blocksize=CHUNK_SAMPLES,
+            blocksize=block_samples,
         ) as stream:
             print("[stt] Calibrando ruido ambiente...")
             cal_energies: list[float] = []
             for _ in range(cal_chunks):
-                data, _ = stream.read(CHUNK_SAMPLES)
-                cal_energies.append(self._measure_energy(data))
+                data, _ = stream.read(block_samples)
+                chunk_flat = data.flatten()
+                if self._need_resample:
+                    chunk_flat = resample_audio(
+                        chunk_flat, self._stream_sr, SAMPLE_RATE
+                    )
+                cal_energies.append(self._measure_energy(chunk_flat))
             noise_floor = float(np.mean(cal_energies))
             threshold = max(noise_floor * self.energy_multiplier, self.min_energy)
             self._last_energy_threshold = threshold
@@ -68,9 +84,14 @@ class SpeechToText:
 
             print("[stt] Escuchando tu comando...")
             for _ in range(max_chunks):
-                data, _ = stream.read(CHUNK_SAMPLES)
-                recorded.append(data.copy())
-                energy = self._measure_energy(data)
+                data, _ = stream.read(block_samples)
+                chunk_flat = data.flatten()
+                if self._need_resample:
+                    chunk_flat = resample_audio(
+                        chunk_flat, self._stream_sr, SAMPLE_RATE
+                    )
+                recorded.append(chunk_flat.reshape(-1, 1).copy())
+                energy = self._measure_energy(chunk_flat)
                 if energy > threshold:
                     speech_started = True
                     silence_count = 0
@@ -85,7 +106,7 @@ class SpeechToText:
         audio_array = np.concatenate(recorded, axis=0)
         return audio_array.tobytes()
 
-    def listen_and_transcribe(self) -> str | None:
+    def listen_and_transcribe(self) -> Optional[str]:
         audio_bytes = self._record_until_silence()
         if not audio_bytes:
             print("[stt] No se detectó voz.")

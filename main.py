@@ -16,7 +16,7 @@ def main():
     wake = WakeWordListener(
         model_name="alexa",
         custom_model_path=None,
-        threshold=0.65,
+        threshold=0.50,
     )
     stt = SpeechToText(language="es-ES")
     brain = Brain()
@@ -38,6 +38,7 @@ def main():
                 tts.say("No te he oído. Vuelvo a escuchar la palabra de activación.")
                 wake.resume()
                 continue
+
 
             print(f"[main] Usuario dijo: '{user_text}'")
 

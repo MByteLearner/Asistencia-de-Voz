@@ -15,4 +15,9 @@ if [[ -d "$HOME/.local/lib" ]] && [[ -z "${LD_LIBRARY_PATH:-}" || "${LD_LIBRARY_
   export LD_LIBRARY_PATH="$HOME/.local/lib:${LD_LIBRARY_PATH:-}"
 fi
 
+# Ensure ALSA output channels are unmuted and set to 80% volume
+amixer -c 1 sset Master unmute 80% >/dev/null 2>&1 || true
+amixer -c 1 sset Speaker unmute 80% >/dev/null 2>&1 || true
+amixer -c 1 sset Headphone unmute 80% >/dev/null 2>&1 || true
+
 exec python -u main.py "$@"

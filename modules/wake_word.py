@@ -7,17 +7,17 @@ import numpy as np
 import openwakeword
 import sounddevice as sd
 
+from .audio_utils import create_input_stream, resample_audio, select_input_device
 
 SAMPLE_RATE = 16000
 FRAME_DURATION_MS = 80
-FRAME_SAMPLES = int(SAMPLE_RATE * FRAME_DURATION_MS / 1000)
 CHANNELS = 1
 DTYPE = "int16"
 
 DEFAULT_MODEL = "alexa"
-DEFAULT_THRESHOLD = 0.65
+DEFAULT_THRESHOLD = 0.50
 COOLDOWN_FRAMES = 20
-PREDICTION_BUFFER_SIZE = 5
+PREDICTION_BUFFER_SIZE = 3
 
 PRETRAINED_MODEL_NAMES = {"alexa", "hey_mycroft", "hey_jarvis", "timer", "weather"}
 
@@ -28,6 +28,7 @@ class WakeWordListener:
         model_name: str = DEFAULT_MODEL,
         custom_model_path: Optional[str] = None,
         threshold: float = DEFAULT_THRESHOLD,
+        input_device: Optional[str] = None,
     ):
         self.threshold = threshold
         self._cooldown = 0
@@ -65,23 +66,37 @@ class WakeWordListener:
 
         self.model = openwakeword.Model(wakeword_model_paths=model_paths)
 
+        self._device_index, self._stream_sr, self._need_resample = (
+            select_input_device(input_device, SAMPLE_RATE)
+        )
+
         self._stream: Optional[sd.InputStream] = None
         self._stop_requested = False
         self._paused = False
 
-        print(
-            f"[wake_word] Modelo cargado: '{self._active_model_label}' "
-            f"(umbral={self.threshold})"
-        )
+        if self._device_index is not None:
+            dev = sd.query_devices(self._device_index)
+            print(
+                f"[wake_word] Modelo cargado: '{self._active_model_label}' "
+                f"(umbral={self.threshold}, dispositivo={self._device_index} "
+                f"'{dev['name']}', sr={self._stream_sr})"
+            )
+        else:
+            print(
+                f"[wake_word] Modelo cargado: '{self._active_model_label}' "
+                f"(umbral={self.threshold})"
+            )
 
     @property
     def active_model_name(self) -> str:
         return self._active_model_label
 
     def _audio_callback(self, indata, frames, time_info, status):
-        if status:
+        if status and not status.input_overflow:
             print(f"[wake_word] estado de audio: {status}", file=sys.stderr)
-        audio_frame = np.frombuffer(indata, dtype=np.int16)
+        audio_frame = indata.flatten()
+        if self._need_resample:
+            audio_frame = resample_audio(audio_frame, self._stream_sr, SAMPLE_RATE)
         prediction = self.model.predict(audio_frame)
         score = float(prediction.get(self._active_model_label, 0.0))
         self._predictions_buffer.append(score)
@@ -91,9 +106,12 @@ class WakeWordListener:
         self._paused = False
         self._cooldown = 0
         self._predictions_buffer.clear()
-        self._stream = sd.InputStream(
-            samplerate=SAMPLE_RATE,
-            blocksize=FRAME_SAMPLES,
+        sd.sleep(400)
+        block_samples = int(self._stream_sr * FRAME_DURATION_MS / 1000)
+        self._stream = create_input_stream(
+            device=self._device_index,
+            samplerate=self._stream_sr,
+            blocksize=block_samples,
             channels=CHANNELS,
             dtype=DTYPE,
             callback=self._audio_callback,
@@ -121,17 +139,16 @@ class WakeWordListener:
         if self._stream is not None:
             try:
                 self._stream.stop()
+                self._stream.close()
             except Exception as exc:
                 print(f"[wake_word] Error pausando: {exc}", file=sys.stderr)
+            self._stream = None
         self._paused = True
         self._predictions_buffer.clear()
 
     def resume(self):
-        if self._stream is not None and not self._stop_requested:
-            try:
-                self._stream.start()
-            except Exception as exc:
-                print(f"[wake_word] Error reanudando: {exc}", file=sys.stderr)
+        if not self._stop_requested:
+            self.start()
         self._paused = False
         self._predictions_buffer.clear()
 
@@ -141,13 +158,13 @@ class WakeWordListener:
         if self._cooldown > 0:
             self._cooldown -= 1
             return False
-        if len(self._predictions_buffer) < PREDICTION_BUFFER_SIZE:
+        if len(self._predictions_buffer) < 1:
             return False
-        avg_score = sum(self._predictions_buffer) / len(self._predictions_buffer)
-        if avg_score >= self.threshold:
+        max_score = max(self._predictions_buffer)
+        if max_score >= self.threshold:
             self._cooldown = COOLDOWN_FRAMES
             self._predictions_buffer.clear()
-            print(f"[wake_word] ¡Activado! score={avg_score:.3f}")
+            print(f"[wake_word] ¡Activado! score={max_score:.3f}")
             return True
         return False
 

@@ -40,17 +40,14 @@ def _list_output_devices() -> List[dict]:
 
 
 def _pick_output_device(requested: Optional[str]) -> Optional[int]:
-    outs = _list_output_devices()
     if requested is None or requested == "":
-        try:
-            return sd.default.device[1]
-        except Exception:
-            return None
+        return None
     try:
         return int(requested)
     except ValueError:
         pass
     requested_lower = requested.lower()
+    outs = _list_output_devices()
     for dev in outs:
         if requested_lower in dev["name"].lower():
             return dev["index"]
