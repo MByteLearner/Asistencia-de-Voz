@@ -40,17 +40,50 @@ def _list_output_devices() -> List[dict]:
 
 
 def _pick_output_device(requested: Optional[str]) -> Optional[int]:
-    if requested is None or requested == "":
+    """Pick the best output device index.
+
+    Priority (when no explicit device is requested):
+      1. Analog (ALC236) — laptop speakers that auto-switch to 3.5 mm jack
+      2. Any non-HDMI output
+      3. sounddevice system default output
+    Explicitly skips HDMI/DisplayPort ports which are silent when no display is connected.
+    """
+    if requested is not None and requested != "":
+        try:
+            return int(requested)
+        except ValueError:
+            pass
+        requested_lower = requested.lower()
+        outs = _list_output_devices()
+        for dev in outs:
+            if requested_lower in dev["name"].lower():
+                return dev["index"]
         return None
-    try:
-        return int(requested)
-    except ValueError:
-        pass
-    requested_lower = requested.lower()
+
     outs = _list_output_devices()
+    SILENT_KEYWORDS = ("hdmi", "displayport", "dp")
+
+    # 1. Prefer analog / headset / speaker outputs (non-HDMI)
     for dev in outs:
-        if requested_lower in dev["name"].lower():
+        name_lower = dev["name"].lower()
+        if not any(k in name_lower for k in SILENT_KEYWORDS):
+            if any(k in name_lower for k in ("analog", "alc", "headphone", "speaker", "audio")):
+                return dev["index"]
+
+    # 2. Any non-HDMI output
+    for dev in outs:
+        name_lower = dev["name"].lower()
+        if not any(k in name_lower for k in SILENT_KEYWORDS):
             return dev["index"]
+
+    # 3. Fallback to sounddevice system default output
+    try:
+        default_out = sd.default.device[1]
+        if default_out is not None and default_out >= 0:
+            return default_out
+    except Exception:
+        pass
+
     return None
 
 
