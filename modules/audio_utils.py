@@ -79,7 +79,15 @@ def select_input_device(
                     chosen_index = d["index"]
                     break
 
-    # 2. Prioritize external mic / USB / headset input devices
+    # 1.5 Prioritize PulseAudio/PipeWire virtual devices to avoid ALSA locking
+    if chosen_index is None:
+        for d in inputs:
+            name_lower = d["name"].lower()
+            if "pulse" in name_lower or "pipewire" in name_lower:
+                chosen_index = d["index"]
+                break
+
+    # 2. Prioritize external mic / USB / headset input devices (fallback if no pulse)
     if chosen_index is None:
         for d in inputs:
             name_lower = d["name"].lower()
@@ -103,10 +111,27 @@ def select_input_device(
         chosen_index = inputs[0]["index"]
 
     if chosen_index is None:
-        print(
-            "[audio_utils] ADVERTENCIA: No se encontró ningún dispositivo de entrada de audio.",
-            file=sys.stderr,
-        )
+        # User wants the system default (None). We must query its native sample rate
+        # to avoid PaErrorCode -9997 (Invalid sample rate) if 16000Hz isn't natively supported.
+        try:
+            def_idx = sd.default.device[0]
+            if def_idx is not None and def_idx >= 0:
+                dev_info = sd.query_devices(def_idx)
+                native_sr = int(dev_info.get("default_samplerate", 44100))
+                if native_sr <= 0:
+                    native_sr = 44100
+                
+                # Check if target_sr is supported directly
+                try:
+                    sd.check_input_settings(
+                        device=None, samplerate=target_sr, channels=1, dtype="int16"
+                    )
+                    return None, target_sr, False
+                except Exception:
+                    # Need resampling
+                    return None, native_sr, True
+        except Exception:
+            pass
         return None, target_sr, False
 
     # Check if target_sr is supported directly by chosen_index

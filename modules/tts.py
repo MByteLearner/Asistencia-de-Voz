@@ -40,13 +40,12 @@ def _list_output_devices() -> List[dict]:
 
 
 def _pick_output_device(requested: Optional[str]) -> Optional[int]:
-    """Pick the best output device index.
-
-    Priority (when no explicit device is requested):
-      1. Analog (ALC236) — laptop speakers that auto-switch to 3.5 mm jack
-      2. Any non-HDMI output
-      3. sounddevice system default output
-    Explicitly skips HDMI/DisplayPort ports which are silent when no display is connected.
+    """Pick the output device index.
+    
+    If no explicit device is requested, we return None to let sounddevice use the
+    system default output. On modern Linux, this routes through PipeWire/PulseAudio,
+    which automatically switches between laptop speakers and USB headsets when connected,
+    and supports full duplex without locking ALSA hardware nodes.
     """
     if requested is not None and requested != "":
         try:
@@ -58,32 +57,19 @@ def _pick_output_device(requested: Optional[str]) -> Optional[int]:
         for dev in outs:
             if requested_lower in dev["name"].lower():
                 return dev["index"]
-        return None
-
+    # Try to find a PulseAudio or PipeWire virtual device
     outs = _list_output_devices()
-    SILENT_KEYWORDS = ("hdmi", "displayport", "dp")
-
-    # 1. Prefer analog / headset / speaker outputs (non-HDMI)
     for dev in outs:
         name_lower = dev["name"].lower()
-        if not any(k in name_lower for k in SILENT_KEYWORDS):
-            if any(k in name_lower for k in ("analog", "alc", "headphone", "speaker", "audio")):
-                return dev["index"]
-
-    # 2. Any non-HDMI output
-    for dev in outs:
-        name_lower = dev["name"].lower()
-        if not any(k in name_lower for k in SILENT_KEYWORDS):
+        if "pulse" in name_lower or "pipewire" in name_lower:
             return dev["index"]
 
-    # 3. Fallback to sounddevice system default output
-    try:
-        default_out = sd.default.device[1]
-        if default_out is not None and default_out >= 0:
-            return default_out
-    except Exception:
-        pass
+    # Try to find an explicit 'default' device in the list
+    for dev in outs:
+        if "default" in dev["name"].lower():
+            return dev["index"]
 
+    # Delegate to system default (None) if no virtual device found
     return None
 
 
@@ -151,7 +137,7 @@ class TextToSpeech:
                 return [path]
         return None
 
-    def _synthesize(self, text: str) -> tuple[bytes, int]:
+    def _synthesize(self, text: str) -> tuple[bytes, int, bytes]:
         assert self._espeak_cmd is not None
         cmd = self._espeak_cmd + [
             "-v", self.voice,
@@ -185,8 +171,12 @@ class TextToSpeech:
                 ],
                 capture_output=True, check=True,
             )
-            return proc2.stdout, 22050
-        return raw, sample_rate
+            # proc2.stdout is a full WAV, but we also need its raw PCM
+            with io.BytesIO(proc2.stdout) as bio2:
+                wav2 = wave.open(bio2, "rb")
+                raw2 = wav2.readframes(wav2.getnframes())
+                return raw2, wav2.getframerate(), proc2.stdout
+        return raw, sample_rate, proc.stdout
 
     def _save_debug_wav(self, raw_bytes: bytes, sample_rate: int):
         if not self.save_debug_wav:
@@ -207,8 +197,22 @@ class TextToSpeech:
             return
         print(f"[tts] >> {text}")
         try:
-            raw_bytes, src_sr = self._synthesize(text)
+            raw_bytes, src_sr, full_wav = self._synthesize(text)
             self._save_debug_wav(raw_bytes, src_sr)
+
+            # Try to use paplay (PulseAudio native) first
+            paplay_path = shutil.which("paplay")
+            if paplay_path:
+                try:
+                    subprocess.run(
+                        [paplay_path],
+                        input=full_wav,
+                        check=True,
+                        stderr=subprocess.DEVNULL
+                    )
+                    return  # Success with PulseAudio!
+                except Exception:
+                    pass  # Fallback to sounddevice
 
             audio_int16 = np.frombuffer(raw_bytes, dtype=np.int16)
             data = audio_int16.astype(np.float32) / 32768.0
@@ -224,6 +228,13 @@ class TextToSpeech:
                     "[tts] ADVERTENCIA: el audio sintetizado es silencio.",
                     file=sys.stderr,
                 )
+            
+            if self._device_index is None and sd.default.device[1] < 0:
+                print(
+                    "[tts] No se encontró un dispositivo ALSA válido y paplay falló. Ignorando.",
+                    file=sys.stderr,
+                )
+                return
 
             sd.play(
                 data,
@@ -236,6 +247,8 @@ class TextToSpeech:
 
     def stop(self):
         try:
+            # We can't easily kill paplay if it's running via subprocess.run, 
+            # but usually it's short. We'll just stop sounddevice.
             sd.stop()
         except Exception:
             pass
