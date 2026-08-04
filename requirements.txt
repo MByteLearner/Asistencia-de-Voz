@@ -1,22 +1,34 @@
-audioop-lts==0.2.2
-cffi==2.1.0
-flatbuffers==25.12.19
-joblib==1.5.3
-narwhals==2.24.0
-numpy==2.5.1
-onnxruntime==1.28.0
-openwakeword==0.4.0
-packaging==26.2
-protobuf==7.35.1
-pycparser==3.0
-pyttsx3==2.99
-scikit-learn==1.9.0
-scipy==1.18.0
+# ──────────────────────────────────────────────────────────────────────────────
+# MAVI-Robot — Dependencias
+#
+# Compatibles con:
+#   - Linux desktop (x86_64)
+#   - Android/Termux (aarch64)  ← pkg install portaudio espeak-ng
+#
+# Instalar con:
+#   pip install -r requirements.txt
+#
+# NOTA: openwakeword y onnxruntime fueron eliminados porque no tienen soporte
+#       oficial para Android/ARM64 vía pip. La activación ahora se realiza
+#       por keyword spotting en el texto transcripto (VoiceListener).
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Audio I/O
 sounddevice==0.5.5
 soundfile==0.14.0
+
+# Procesamiento de señal y numérico
+numpy==2.5.1
+scipy==1.18.0
+
+# Speech-to-Text
 SpeechRecognition==3.17.0
+
+# Compatibilidad con Python 3.13 (módulos eliminados del stdlib)
+audioop-lts==0.2.2
 standard-aifc==3.13.0
 standard-chunk==3.13.0
-threadpoolctl==3.6.0
-tqdm==4.70.0
+
+# Utilidades
 typing_extensions==4.16.0
+tqdm==4.70.0
