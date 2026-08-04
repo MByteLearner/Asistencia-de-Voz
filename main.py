@@ -1,63 +1,100 @@
+"""
+main.py
+───────
+Punto de entrada del asistente de voz MAVI-Robot.
+
+Flujo principal:
+  1. El VoiceListener graba audio continuamente.
+  2. Transcribe con Google STT.
+  3. Si el texto empieza con una palabra de activación (jarvis / mavi / asistente),
+     extrae el comando y lo envía al Brain.
+  4. El Brain procesa el comando y retorna una respuesta.
+  5. El TTS vocaliza la respuesta.
+  6. Vuelta al paso 1.
+
+Compatibilidad:
+  - Linux desktop (x86_64)
+  - Android / Termux (aarch64)
+"""
+
+from __future__ import annotations
+
+import logging
 import sys
 
-from modules import Brain, SpeechToText, TextToSpeech, WakeWordListener
+from modules import Brain, SpeechToText, TextToSpeech, VoiceListener
+
+# ─── Configuración de logging ────────────────────────────────────────────────
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+
+logger = logging.getLogger(__name__)
 
 
-def main():
-    print("==================================================")
+# ─── Main ─────────────────────────────────────────────────────────────────────
+
+
+def main() -> int:
+    """Inicializa el asistente y entra en el bucle de escucha continua.
+
+    Returns:
+        Código de salida (0 = normal, 1 = error de inicialización).
+    """
+    print("=" * 50)
     print("  MAVI-Robot · Asistente de voz local")
-    print("  Wake word: openwakeword | STT: Google (es-ES)")
-    print("  TTS: espeak-ng + sounddevice (offline, PipeWire-friendly)")
-    print("==================================================")
-    print("Di la palabra de activación y luego tu comando.")
-    print("Para salir del programa, di 'adiós' o pulsa Ctrl+C.")
+    print("  Activación: jarvis / mavi / asistente")
+    print("  STT: Google Speech Recognition (es-ES)")
+    print("  TTS: termux-tts-speak | paplay | espeak-ng")
+    print("=" * 50)
     print()
 
-    wake = WakeWordListener(
-        model_name="alexa",
-        custom_model_path=None,
-        threshold=0.50,
-    )
-    stt = SpeechToText(language="es-ES")
-    brain = Brain()
-    tts = TextToSpeech(voice="es", rate=165, volume=1.0, output_device=None)
+    try:
+        listener = VoiceListener(language="es-ES")
+        brain = Brain()
+        tts = TextToSpeech(voice="es", rate=165, volume=1.0)
+    except Exception as exc:
+        logger.error("Error al inicializar el asistente: %s", exc)
+        return 1
 
-    tts.say("Asistente listo. Di la palabra de activación para comenzar.")
+    logger.info(
+        "Asistente listo. Di una de estas palabras para activarlo: %s",
+        ", ".join(sorted(listener.wake_words)),
+    )
+    tts.say("Asistente listo. Di jarvis, mavi o asistente para comenzar.")
 
     try:
-        wake.start()
-        while True:
-            activated = wake.wait_for_activation()
-            if not activated:
+        # Escucha continua usando el generador de VoiceListener
+        for command in listener.continuous_listen():
+
+            # Comando de salida
+            if brain.is_exit_command(command):
+                logger.info("Comando de salida detectado.")
+                tts.say("Hasta luego. Apagando asistente.")
                 break
 
-            wake.pause()
-            tts.say("Te escucho.")
-            user_text = stt.listen_and_transcribe()
-            if not user_text:
-                tts.say("No te he oído. Vuelvo a escuchar la palabra de activación.")
-                wake.resume()
+            # Comando sin contenido (solo se dijo la wake word)
+            if not command:
+                tts.say("Te escucho, ¿en qué puedo ayudarte?")
                 continue
 
-
-            print(f"[main] Usuario dijo: '{user_text}'")
-
-            if brain.is_exit_command(user_text):
-                response = "Hasta luego. Apagando asistente."
-                tts.say(response)
-                break
-
-            response = brain.handle(user_text)
-            print(f"[main] Respuesta: '{response}'")
+            # Procesar comando
+            logger.info("Comando recibido: '%s'", command)
+            response = brain.handle(command)
+            logger.info("Respuesta: '%s'", response)
             tts.say(response)
-            wake.resume()
 
     except KeyboardInterrupt:
-        print("\n[main] Interrumpido por el usuario.")
+        logger.info("Interrumpido por el usuario (Ctrl+C).")
     finally:
-        wake.stop()
         tts.stop()
-        print("[main] Asistente detenido.")
+        logger.info("Asistente detenido.")
+
+    return 0
 
 
 if __name__ == "__main__":
