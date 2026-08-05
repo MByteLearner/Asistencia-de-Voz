@@ -1,34 +1,29 @@
 # ──────────────────────────────────────────────────────────────────────────────
-# MAVI-Robot — Dependencias
+# MAVI-Robot — Dependencias (Compatible con ARM64 / Termux / Linux)
 #
-# Compatibles con:
-#   - Linux desktop (x86_64)
-#   - Android/Termux (aarch64)  ← pkg install portaudio espeak-ng
-#
-# Instalar con:
-#   pip install -r requirements.txt
-#
-# NOTA: openwakeword y onnxruntime fueron eliminados porque no tienen soporte
-#       oficial para Android/ARM64 vía pip. La activación ahora se realiza
-#       por keyword spotting en el texto transcripto (VoiceListener).
+# En Android/Termux:
+#   1. Instalar librerías nativas primero:
+#      pkg update && pkg install portaudio espeak -y
+#   2. Instalar dependencias Python:
+#      pip install -r requirements.txt
 # ──────────────────────────────────────────────────────────────────────────────
 
 # Audio I/O
-sounddevice==0.5.5
-soundfile==0.14.0
+sounddevice>=0.4.6
+soundfile>=0.12.0
 
-# Procesamiento de señal y numérico
-numpy==2.5.1
-scipy==1.18.0
+# Procesamiento numérico y señales
+numpy>=1.26.0
+scipy>=1.10.0
 
 # Speech-to-Text
-SpeechRecognition==3.17.0
+SpeechRecognition>=3.10.0
 
-# Compatibilidad con Python 3.13 (módulos eliminados del stdlib)
-audioop-lts==0.2.2
-standard-aifc==3.13.0
-standard-chunk==3.13.0
+# Compatibilidad Python 3.13+
+audioop-lts>=0.2.0
+standard-aifc>=3.13.0
+standard-chunk>=3.13.0
 
 # Utilidades
-typing_extensions==4.16.0
-tqdm==4.70.0
+typing_extensions>=4.8.0
+tqdm>=4.65.0
